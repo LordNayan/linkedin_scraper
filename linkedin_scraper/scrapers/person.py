@@ -1,12 +1,14 @@
 """Person/Profile scraper for LinkedIn."""
 
 import logging
-from typing import Optional
+import re
+from typing import Optional, List
 from urllib.parse import urljoin
 from playwright.async_api import Page
 
 from .base import BaseScraper
 from ..models import Person, Experience, Education, Accomplishment, Interest, Contact
+from ..models.person import PersonActivity, PersonComment
 from ..callbacks import ProgressCallback, SilentCallback
 from ..core.exceptions import ScrapingError
 
@@ -69,23 +71,44 @@ class PersonScraper(BaseScraper):
             await self.scroll_page_to_half()
             await self.scroll_page_to_bottom(pause_time=0.5, max_scrolls=3)
 
-            # Get experiences
+            # Get only current experience (first one)
             experiences = await self._get_experiences(linkedin_url)
-            await self.callback.on_progress(f"Got {len(experiences)} experiences", 60)
+            current_experience = experiences[0] if experiences else None
+            await self.callback.on_progress(f"Got current experience", 50)
 
-            educations = await self._get_educations(linkedin_url)
-            await self.callback.on_progress(f"Got {len(educations)} educations", 50)
+            # Get current company details if there's a current experience
+            current_company = None
+            if current_experience and current_experience.linkedin_url:
+                try:
+                    from .company import CompanyScraper
+                    company_scraper = CompanyScraper(self.page)
+                    current_company = await company_scraper.scrape(current_experience.linkedin_url)
+                    await self.callback.on_progress(f"Got company details", 70)
+                except Exception as e:
+                    logger.warning(f"Could not scrape company details: {e}")
 
-            interests = await self._get_interests(linkedin_url)
-            await self.callback.on_progress(f"Got {len(interests)} interests", 65)
+            # Comment out other scraping
+            # educations = await self._get_educations(linkedin_url)
+            # await self.callback.on_progress(f"Got {len(educations)} educations", 50)
 
-            accomplishments = await self._get_accomplishments(linkedin_url)
-            await self.callback.on_progress(
-                f"Got {len(accomplishments)} accomplishments", 85
-            )
+            # interests = await self._get_interests(linkedin_url)
+            # await self.callback.on_progress(f"Got {len(interests)} interests", 65)
 
-            contacts = await self._get_contacts(linkedin_url)
-            await self.callback.on_progress(f"Got {len(contacts)} contacts", 95)
+            # accomplishments = await self._get_accomplishments(linkedin_url)
+            # await self.callback.on_progress(
+            #     f"Got {len(accomplishments)} accomplishments", 85
+            # )
+
+            # contacts = await self._get_contacts(linkedin_url)
+            # await self.callback.on_progress(f"Got {len(contacts)} contacts", 90)
+
+            # Get recent posts and reposts (last 3)
+            recent_posts = await self._get_recent_posts(linkedin_url, limit=3)
+            await self.callback.on_progress(f"Got {len(recent_posts)} recent posts", 95)
+
+            # Get recent comments (last 3)
+            recent_comments = await self._get_recent_comments(linkedin_url, limit=3)
+            await self.callback.on_progress(f"Got {len(recent_comments)} recent comments", 98)
 
             person = Person(
                 linkedin_url=linkedin_url,
@@ -93,11 +116,14 @@ class PersonScraper(BaseScraper):
                 location=location,
                 about=about,
                 open_to_work=open_to_work,
-                experiences=experiences,
-                educations=educations,
-                interests=interests,
-                accomplishments=accomplishments,
-                contacts=contacts,
+                experiences=[current_experience] if current_experience else [],
+                educations=[],  # Commented out
+                interests=[],  # Commented out
+                accomplishments=[],  # Commented out
+                contacts=[],  # Commented out
+                recent_posts=recent_posts,
+                recent_comments=recent_comments,
+                current_company=current_company,  # Include in initialization
             )
 
             await self.callback.on_progress("Scraping complete", 100)
@@ -108,6 +134,68 @@ class PersonScraper(BaseScraper):
         except Exception as e:
             await self.callback.on_error(e)
             raise ScrapingError(f"Failed to scrape person profile: {e}")
+
+    async def scrape_recent_posts(self, linkedin_url: str, limit: int = 3) -> List[PersonActivity]:
+        """
+        Scrape only the recent posts and reposts from a LinkedIn profile.
+        
+        Args:
+            linkedin_url: LinkedIn profile URL
+            limit: Number of posts to retrieve (default 3)
+            
+        Returns:
+            List of PersonActivity objects
+            
+        Raises:
+            AuthenticationError: If not logged in
+            ScrapingError: If scraping fails
+        """
+        await self.callback.on_start("person_posts", linkedin_url)
+        
+        try:
+            await self.navigate_and_wait(linkedin_url)
+            await self.ensure_logged_in()
+            
+            posts = await self._get_recent_posts(linkedin_url, limit=limit)
+            await self.callback.on_progress(f"Got {len(posts)} recent posts", 100)
+            await self.callback.on_complete("person_posts", posts)
+            
+            return posts
+            
+        except Exception as e:
+            await self.callback.on_error(e)
+            raise ScrapingError(f"Failed to scrape person posts: {e}")
+
+    async def scrape_recent_comments(self, linkedin_url: str, limit: int = 3) -> List[PersonComment]:
+        """
+        Scrape only the recent comments from a LinkedIn profile.
+        
+        Args:
+            linkedin_url: LinkedIn profile URL
+            limit: Number of comments to retrieve (default 3)
+            
+        Returns:
+            List of PersonComment objects
+            
+        Raises:
+            AuthenticationError: If not logged in
+            ScrapingError: If scraping fails
+        """
+        await self.callback.on_start("person_comments", linkedin_url)
+        
+        try:
+            await self.navigate_and_wait(linkedin_url)
+            await self.ensure_logged_in()
+            
+            comments = await self._get_recent_comments(linkedin_url, limit=limit)
+            await self.callback.on_progress(f"Got {len(comments)} recent comments", 100)
+            await self.callback.on_complete("person_comments", comments)
+            
+            return comments
+            
+        except Exception as e:
+            await self.callback.on_error(e)
+            raise ScrapingError(f"Failed to scrape person comments: {e}")
 
     async def _get_name_and_location(self) -> tuple[str, Optional[str]]:
         """Extract name and location from profile."""
@@ -1120,3 +1208,550 @@ class PersonScraper(BaseScraper):
         elif "address" in heading:
             return "address"
         return None
+
+    async def _get_recent_posts(self, base_url: str, limit: int = 3) -> List[PersonActivity]:
+        """
+        Extract the last N posts and reposts from a person's activity page.
+        
+        Args:
+            base_url: The person's LinkedIn profile URL
+            limit: Number of posts to retrieve (default 3)
+            
+        Returns:
+            List of PersonActivity objects
+        """
+        posts: List[PersonActivity] = []
+        
+        try:
+            # Ensure base_url ends with / for proper URL joining
+            if not base_url.endswith('/'):
+                base_url = base_url + '/'
+            
+            # Navigate to the recent activity/posts page
+            activity_url = urljoin(base_url, "recent-activity/all/")
+            logger.info(f"Navigating to posts activity page: {activity_url}")
+            await self.navigate_and_wait(activity_url)
+            logger.info(f"Successfully navigated to: {self.page.url}")
+            
+            # Try to wait for main, but continue if it times out
+            try:
+                logger.debug("Waiting for main selector...")
+                await self.page.wait_for_selector("main", timeout=5000)
+                logger.debug("Main selector found")
+            except Exception as e:
+                logger.warning(f"Main selector timeout, continuing anyway: {e}")
+            
+            await self.wait_and_focus(2)
+            logger.debug("Completed wait and focus")
+            logger.debug("Completed wait and focus")
+            
+            # Scroll to load content
+            logger.debug("Starting to scroll page...")
+            await self.scroll_page_to_half()
+            await self.scroll_page_to_bottom(pause_time=0.5, max_scrolls=3)
+            logger.debug("Completed scrolling")
+            
+            # Extract posts using JavaScript
+            logger.info(f"Extracting posts data via JavaScript (limit: {limit})...")
+            posts_data = await self.page.evaluate('''(limit) => {
+                const posts = [];
+                const html = document.body.innerHTML;
+                
+                // Find all activity URNs in the page
+                const urnMatches = html.matchAll(/urn:li:activity:(\\d+)/g);
+                const seenUrns = new Set();
+                
+                for (const match of urnMatches) {
+                    if (posts.length >= limit) break;
+                    
+                    const urn = match[0];
+                    if (seenUrns.has(urn)) continue;
+                    seenUrns.add(urn);
+                    
+                    // Find the element with this URN
+                    const el = document.querySelector(`[data-urn="${urn}"]`);
+                    if (!el) continue;
+                    
+                    // Check if it's a repost
+                    const headerText = el.querySelector('.update-components-header, .feed-shared-update-v2__description-wrapper')?.innerText || '';
+                    const isRepost = headerText.toLowerCase().includes('reposted') || 
+                                     headerText.toLowerCase().includes('shared');
+                    
+                    // Get original author if repost
+                    let originalAuthor = null;
+                    if (isRepost) {
+                        const actorEl = el.querySelector('.update-components-actor__name, .feed-shared-actor__name');
+                        if (actorEl) {
+                            originalAuthor = actorEl.innerText?.trim() || null;
+                        }
+                    }
+                    
+                    // Get text content
+                    let text = '';
+                    const textSelectors = [
+                        '.feed-shared-update-v2__description',
+                        '.update-components-text',
+                        '.feed-shared-text',
+                        '.break-words.whitespace-pre-wrap'
+                    ];
+                    
+                    for (const sel of textSelectors) {
+                        const textEl = el.querySelector(sel);
+                        if (textEl) {
+                            const t = textEl.innerText?.trim() || '';
+                            if (t.length > text.length && t.length > 10) {
+                                text = t;
+                            }
+                        }
+                    }
+                    
+                    // Get time
+                    const timeEl = el.querySelector('[class*="actor__sub-description"], [class*="update-components-actor__sub-description"]');
+                    const timeText = timeEl ? timeEl.innerText : '';
+                    
+                    // Get reactions
+                    const reactionsEl = el.querySelector('button[aria-label*="reaction"], [class*="social-details-social-counts__reactions"]');
+                    const reactions = reactionsEl ? reactionsEl.innerText : '';
+                    
+                    // Get comments
+                    const commentsEl = el.querySelector('button[aria-label*="comment"]');
+                    const comments = commentsEl ? commentsEl.innerText : '';
+                    
+                    // Get reposts count
+                    const repostsEl = el.querySelector('button[aria-label*="repost"]');
+                    const reposts = repostsEl ? repostsEl.innerText : '';
+                    
+                    // Get images
+                    const images = [];
+                    el.querySelectorAll('img[src*="media"]').forEach(img => {
+                        if (img.src && !img.src.includes('profile') && !img.src.includes('logo')) {
+                            images.push(img.src);
+                        }
+                    });
+                    
+                    posts.push({
+                        urn: urn,
+                        text: text.substring(0, 2000),
+                        timeText: timeText,
+                        isRepost: isRepost,
+                        originalAuthor: originalAuthor,
+                        reactions: reactions,
+                        comments: comments,
+                        reposts: reposts,
+                        images: images
+                    });
+                }
+                
+                return posts;
+            }''', limit)
+            
+            logger.info(f"JavaScript returned {len(posts_data)} posts")
+            
+            for idx, data in enumerate(posts_data):
+                logger.debug(f"Processing post {idx + 1}/{len(posts_data)}: URN={data.get('urn')}")
+                activity_id = data['urn'].replace('urn:li:activity:', '')
+                post = PersonActivity(
+                    linkedin_url=f"https://www.linkedin.com/feed/update/urn:li:activity:{activity_id}/",
+                    urn=data['urn'],
+                    text=data['text'],
+                    posted_date=self._extract_time_from_text(data.get('timeText', '')),
+                    is_repost=data.get('isRepost', False),
+                    original_author=data.get('originalAuthor'),
+                    reactions_count=self._parse_count(data.get('reactions', '')),
+                    comments_count=self._parse_count(data.get('comments', '')),
+                    reposts_count=self._parse_count(data.get('reposts', '')),
+                    image_urls=data.get('images', [])
+                )
+                posts.append(post)
+                logger.debug(f"Post {idx + 1} parsed: {post.text[:50] if post.text else 'No text'}...")
+            
+            logger.info(f"Successfully extracted {len(posts)} posts")
+            
+        except Exception as e:
+            logger.error(f"Error getting recent posts: {e}", exc_info=True)
+        
+        return posts[:limit]
+
+    async def _get_recent_comments(self, base_url: str, limit: int = 3) -> List[PersonComment]:
+        """
+        Extract the last N comments made by a person.
+        
+        Args:
+            base_url: The person's LinkedIn profile URL
+            limit: Number of comments to retrieve (default 3)
+            
+        Returns:
+            List of PersonComment objects
+        """
+        comments: List[PersonComment] = []
+        
+        try:
+            # Ensure base_url ends with / for proper URL joining
+            if not base_url.endswith('/'):
+                base_url = base_url + '/'
+            
+            # Navigate to the comments activity page
+            comments_url = urljoin(base_url, "recent-activity/comments/")
+            logger.info(f"Navigating to comments activity page: {comments_url}")
+            await self.navigate_and_wait(comments_url)
+            logger.info(f"Successfully navigated to: {self.page.url}")
+            
+            # Try to wait for main, but continue if it times out
+            try:
+                logger.debug("Waiting for main selector...")
+                await self.page.wait_for_selector("main", timeout=5000)
+                logger.debug("Main selector found")
+            except Exception as e:
+                logger.warning(f"Main selector timeout, continuing anyway: {e}")
+            
+            await self.wait_and_focus(2)
+            logger.debug("Completed wait and focus")
+            
+            # Scroll to load content
+            logger.debug("Starting to scroll page...")
+            await self.scroll_page_to_half()
+            await self.scroll_page_to_bottom(pause_time=0.5, max_scrolls=3)
+            logger.debug("Completed scrolling")
+            
+            # Debug: Check page content
+            page_text = await self.page.content()
+            logger.debug(f"Page content length: {len(page_text)} characters")
+            
+            # First, let's see what's on the page
+            logger.info("Analyzing page structure...")
+            all_text = await self.page.evaluate('''() => {
+                return document.body.innerText.substring(0, 500);
+            }''')
+            logger.debug(f"Page text preview: {all_text}")
+            
+            # Extract comments using JavaScript with extensive logging
+            logger.info(f"Extracting comments data via JavaScript (limit: {limit})...")
+            comments_data = await self.page.evaluate('''(limit) => {
+                const comments = [];
+                const debugLog = [];
+                
+                debugLog.push('Starting comment extraction...');
+                
+                // Strategy 1: Look for feed items that indicate commenting activity
+                const feedItems = document.querySelectorAll('[data-urn], .feed-shared-update-v2, .profile-creator-shared-feed-update__container');
+                debugLog.push(`Found ${feedItems.length} potential feed items`);
+                
+                for (let i = 0; i < feedItems.length && comments.length < limit; i++) {
+                    const el = feedItems[i];
+                    
+                    // Check if this is a comment activity
+                    const activityText = el.innerText || '';
+                    const hasCommentIndicator = activityText.toLowerCase().includes('commented') ||
+                                               activityText.toLowerCase().includes('comment on this');
+                    
+                    if (!hasCommentIndicator) {
+                        continue;
+                    }
+                    
+                    debugLog.push(`Item ${i}: Found comment indicator`);
+                    
+                    const urn = el.getAttribute('data-urn') || '';
+                    
+                    // Try to find the actual comment text
+                    let commentText = '';
+                    let commentedDate = '';
+                    let postAuthor = '';
+                    let postTextPreview = '';
+                    
+                    // Look for comment text in various possible locations
+                    const commentSelectors = [
+                        '.comments-comment-item__main-content',
+                        '.comments-comment-item-content-body',
+                        '.comment-text',
+                        '[class*="comment"][class*="content"]',
+                        '.feed-shared-text',
+                        '.update-components-text'
+                    ];
+                    
+                    for (const selector of commentSelectors) {
+                        const commentEl = el.querySelector(selector);
+                        if (commentEl) {
+                            const text = commentEl.innerText?.trim();
+                            if (text && text.length > 10) {
+                                commentText = text;
+                                debugLog.push(`Found comment text with ${selector}: ${text.substring(0, 50)}...`);
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // If still no comment text, try to extract from the main text
+                    if (!commentText) {
+                        // Sometimes the comment is in the description area
+                        const descEl = el.querySelector('.feed-shared-update-v2__description, .feed-shared-text');
+                        if (descEl) {
+                            commentText = descEl.innerText?.trim() || '';
+                            debugLog.push(`Extracted from description: ${commentText.substring(0, 50)}...`);
+                        }
+                    }
+                    
+                    // Get timestamp
+                    const timeEl = el.querySelector('time, [class*="time"], [class*="timestamp"]');
+                    if (timeEl) {
+                        commentedDate = timeEl.innerText?.trim() || timeEl.getAttribute('datetime') || '';
+                    }
+                    
+                    // Get post author
+                    const authorEl = el.querySelector('.update-components-actor__name, .feed-shared-actor__name, [class*="actor"][class*="name"]');
+                    if (authorEl) {
+                        postAuthor = authorEl.innerText?.trim() || '';
+                    }
+                    
+                    // Get full post text (not just preview)
+                    // Look for the main post content, excluding comment text and author info
+                    let postText = '';
+                    
+                    // Strategy 1: Look for feed-shared-update-v2__description (main post content)
+                    const postContentEl = el.querySelector('.feed-shared-update-v2__description, .feed-shared-inline-show-more-text');
+                    if (postContentEl) {
+                        const text = postContentEl.innerText?.trim();
+                        if (text && text.length > 20 && text !== commentText && text !== postAuthor) {
+                            postText = text;
+                            postTextPreview = text.substring(0, 150);
+                            debugLog.push(`Found post text via description: ${text.substring(0, 50)}...`);
+                        }
+                    }
+                    
+                    // Strategy 2: If not found, look for update-components-text that's not the comment
+                    if (!postText) {
+                        const textEls = el.querySelectorAll('.update-components-text, .feed-shared-text');
+                        for (const textEl of textEls) {
+                            const text = textEl.innerText?.trim();
+                            // Make sure it's not the comment, not the author, and has substantial content
+                            if (text && text.length > 30 && 
+                                text !== commentText && 
+                                text !== postAuthor &&
+                                !text.includes('commented on this')) {
+                                postText = text;
+                                postTextPreview = text.substring(0, 150);
+                                debugLog.push(`Found post text via text elements: ${text.substring(0, 50)}...`);
+                                break;
+                            }
+                        }
+                    }
+                    
+                    if (commentText && commentText.length > 5) {
+                        debugLog.push(`Adding comment: ${commentText.substring(0, 30)}...`);
+                        comments.push({
+                            postUrn: urn,
+                            commentText: commentText.substring(0, 1000),
+                            commentedDate: commentedDate,
+                            postAuthor: postAuthor,
+                            postText: postText,
+                            postTextPreview: postTextPreview
+                        });
+                    } else {
+                        debugLog.push(`Skipped - no valid comment text found`);
+                    }
+                }
+                
+                debugLog.push(`Total comments found: ${comments.length}`);
+                
+                return { comments: comments, debug: debugLog };
+            }''', limit)
+            
+            # Log debug info from JavaScript
+            if 'debug' in comments_data:
+                for log_line in comments_data['debug']:
+                    logger.debug(f"[JS] {log_line}")
+            
+            actual_comments = comments_data.get('comments', [])
+            logger.info(f"JavaScript returned {len(actual_comments)} comments")
+            
+            for idx, data in enumerate(actual_comments):
+                logger.debug(f"Processing comment {idx + 1}/{len(actual_comments)}: URN={data.get('postUrn')}")
+                post_urn = data.get('postUrn', '')
+                activity_id = post_urn.replace('urn:li:activity:', '') if post_urn else ''
+                
+                comment = PersonComment(
+                    linkedin_url=f"https://www.linkedin.com/feed/update/urn:li:activity:{activity_id}/" if activity_id else None,
+                    post_urn=post_urn if post_urn else None,
+                    comment_text=data.get('commentText'),
+                    commented_date=data.get('commentedDate'),
+                    post_author=data.get('postAuthor'),
+                    post_text=data.get('postText'),
+                    post_text_preview=data.get('postTextPreview')
+                )
+                comments.append(comment)
+                logger.debug(f"Comment {idx + 1} parsed: {comment.comment_text[:50] if comment.comment_text else 'No text'}...")
+            
+            logger.info(f"Successfully extracted {len(comments)} comments")
+            
+        except Exception as e:
+            logger.error(f"Error getting recent comments: {e}", exc_info=True)
+        
+        return comments[:limit]
+
+    def _extract_time_from_text(self, text: str) -> Optional[str]:
+        """Extract time/date from text."""
+        if not text:
+            return None
+        match = re.search(r'(\d+[hdwmy]|\d+\s*(?:hour|day|week|month|year)s?\s*ago)', text, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+        parts = text.split('•')
+        if parts:
+            return parts[0].strip()
+        return None
+
+    def _parse_count(self, text: str) -> Optional[int]:
+        """Parse count from text like '123 reactions'."""
+        if not text:
+            return None
+        try:
+            numbers = re.findall(r'[\d,]+', text.replace(',', ''))
+            if numbers:
+                return int(numbers[0])
+        except:
+            pass
+        return None
+
+    @staticmethod
+    def generate_markdown_profile(person, current_company=None) -> str:
+        """
+        Generate a markdown document with LinkedIn profile details for AI analysis.
+        
+        Args:
+            person: Person object with profile data
+            current_company: Optional Company object with current company details
+                           (if None, will try to use person.current_company)
+            
+        Returns:
+            Markdown formatted string
+        """
+        # Use company from person object if not provided
+        if current_company is None:
+            current_company = getattr(person, 'current_company', None)
+        
+        md = []
+        md.append("# LinkedIn Profile Analysis\n")
+        
+        # 1. LinkedIn Profile URL
+        md.append("## 1. LinkedIn Profile URL")
+        md.append(f"{person.linkedin_url}\n")
+        
+        # 2. Name
+        md.append("## 2. Name")
+        md.append(f"{person.name}\n")
+        
+        # 3. Location
+        md.append("## 3. Location")
+        md.append(f"{person.location if person.location else 'Not specified'}\n")
+        
+        # 4. About
+        md.append("## 4. About")
+        if person.about:
+            md.append(f"{person.about}\n")
+        else:
+            md.append("Not provided\n")
+        
+        # 5. Current Company Details
+        md.append("## 5. Current Company Details")
+        if person.experiences and len(person.experiences) > 0:
+            current_exp = person.experiences[0]
+            md.append(f"**Company Name:** {current_exp.institution_name}")
+            if current_exp.linkedin_url:
+                md.append(f"**Company LinkedIn:** {current_exp.linkedin_url}")
+            
+            # Add company description if available
+            if current_company:
+                md.append(f"\n**What the company does:**")
+                if current_company.about_us:
+                    md.append(f"{current_company.about_us}")
+                else:
+                    md.append("Company description not available")
+                if current_company.website:
+                    md.append(f"\n**Website:** {current_company.website}")
+                if current_company.industry:
+                    md.append(f"**Industry:** {current_company.industry}")
+                if current_company.company_size:
+                    md.append(f"**Company Size:** {current_company.company_size}")
+                if current_company.headquarters:
+                    md.append(f"**Headquarters:** {current_company.headquarters}")
+                if current_company.founded:
+                    md.append(f"**Founded:** {current_company.founded}")
+            md.append("")
+        else:
+            md.append("No current company information available\n")
+        
+        # 6. Current Designation and Work Description
+        md.append("## 6. Current Designation and Work Description")
+        if person.experiences and len(person.experiences) > 0:
+            current_exp = person.experiences[0]
+            md.append(f"**Position:** {current_exp.position_title}")
+            if current_exp.from_date or current_exp.to_date:
+                date_str = f"{current_exp.from_date or ''} - {current_exp.to_date or 'Present'}"
+                if current_exp.duration:
+                    date_str += f" ({current_exp.duration})"
+                md.append(f"**Duration:** {date_str}")
+            if current_exp.location:
+                md.append(f"**Location:** {current_exp.location}")
+            if current_exp.description:
+                md.append(f"\n**Work Description:**")
+                md.append(f"{current_exp.description}")
+            md.append("")
+        else:
+            md.append("No current position information available\n")
+        
+        # 7. Last 3 Posts/Reposts
+        md.append("## 7. Last 3 Posts/Reposts")
+        if person.recent_posts and len(person.recent_posts) > 0:
+            for i, post in enumerate(person.recent_posts, 1):
+                post_type = "Repost" if post.is_repost else "Post"
+                md.append(f"\n### {post_type} {i}")
+                if post.posted_date:
+                    md.append(f"**Posted:** {post.posted_date}")
+                if post.is_repost and post.original_author:
+                    md.append(f"**Original Author:** {post.original_author}")
+                if post.linkedin_url:
+                    md.append(f"**Link:** {post.linkedin_url}")
+                md.append(f"\n**Content:**")
+                md.append(f"{post.text if post.text else 'No text content'}")
+                if post.reactions_count or post.comments_count or post.reposts_count:
+                    engagement = []
+                    if post.reactions_count:
+                        engagement.append(f"👍 {post.reactions_count} reactions")
+                    if post.comments_count:
+                        engagement.append(f"💬 {post.comments_count} comments")
+                    if post.reposts_count:
+                        engagement.append(f"🔄 {post.reposts_count} reposts")
+                    md.append(f"\n**Engagement:** {' | '.join(engagement)}")
+                md.append("")
+        else:
+            md.append("No recent posts available\n")
+        
+        # 8. Last 3 Comments
+        md.append("## 8. Last 3 Comments Made")
+        if person.recent_comments and len(person.recent_comments) > 0:
+            for i, comment in enumerate(person.recent_comments, 1):
+                md.append(f"\n### Comment {i}")
+                if comment.commented_date:
+                    md.append(f"**Commented on:** {comment.commented_date}")
+                if comment.post_author:
+                    md.append(f"**Post by:** {comment.post_author}")
+                if comment.linkedin_url:
+                    md.append(f"**Link:** {comment.linkedin_url}")
+                
+                md.append(f"\n**Comment Text:**")
+                md.append(f"{comment.comment_text if comment.comment_text else 'No comment text'}")
+                
+                if comment.post_text:
+                    md.append(f"\n**Original Post:**")
+                    md.append(f"{comment.post_text}")
+                elif comment.post_text_preview:
+                    md.append(f"\n**Original Post (preview):**")
+                    md.append(f"{comment.post_text_preview}")
+                md.append("")
+        else:
+            md.append("No recent comments available\n")
+        
+        # Footer
+        md.append("---")
+        md.append("*This profile summary was generated for AI analysis purposes.*")
+        
+        return "\n".join(md)

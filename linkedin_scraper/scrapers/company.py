@@ -98,21 +98,70 @@ class CompanyScraper(BaseScraper):
     async def _get_about(self) -> Optional[str]:
         """Extract about/description section."""
         try:
-            # Look for "About us" section
+            logger.info("Attempting to extract company about section...")
+            
+            # First try the main page
             sections = await self.page.locator('section').all()
+            logger.debug(f"Found {len(sections)} sections on main page")
             
             for section in sections:
                 section_text = await section.inner_text()
-                if 'About us' in section_text[:50]:
+                if 'About us' in section_text[:100] or 'Overview' in section_text[:100]:
                     # Get the content paragraph
                     paragraphs = await section.locator('p').all()
+                    logger.debug(f"Found {len(paragraphs)} paragraphs in about section")
                     if paragraphs:
                         about = await paragraphs[0].inner_text()
-                        return about.strip()
+                        if about and len(about.strip()) > 20:
+                            logger.info(f"Found about text on main page: {about[:100]}...")
+                            return about.strip()
             
+            # If not found on main page, try navigating to About page
+            logger.info("About not found on main page, trying About tab...")
+            current_url = self.page.url
+            
+            # Navigate to about page
+            if not current_url.endswith('/about/'):
+                about_url = current_url.rstrip('/') + '/about/'
+                logger.info(f"Navigating to: {about_url}")
+                await self.navigate_and_wait(about_url)
+                await self.wait_and_focus(1)
+                
+                # Try to find the about section on the about page
+                # Look for section with overview or about
+                sections = await self.page.locator('section').all()
+                logger.debug(f"Found {len(sections)} sections on about page")
+                
+                for section in sections:
+                    # Look for paragraphs with substantial content
+                    paragraphs = await section.locator('p').all()
+                    for p in paragraphs:
+                        text = await p.inner_text()
+                        if text and len(text.strip()) > 50:
+                            logger.info(f"Found about text on about page: {text[:100]}...")
+                            return text.strip()
+                
+                # Try alternative selectors
+                # LinkedIn often uses specific class patterns
+                about_selectors = [
+                    '.break-words',
+                    '[class*="description"]',
+                    '[class*="about"]',
+                    'p.text-color-text'
+                ]
+                
+                for selector in about_selectors:
+                    elements = await self.page.locator(selector).all()
+                    for elem in elements:
+                        text = await elem.inner_text()
+                        if text and len(text.strip()) > 50 and 'employee' not in text.lower():
+                            logger.info(f"Found about text using selector {selector}: {text[:100]}...")
+                            return text.strip()
+            
+            logger.warning("Could not find company about section")
             return None
         except Exception as e:
-            logger.debug(f"Error getting about section: {e}")
+            logger.error(f"Error getting about section: {e}", exc_info=True)
             return None
     
     async def _get_overview(self) -> dict:
