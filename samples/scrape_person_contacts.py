@@ -3,7 +3,7 @@
 Example: Scrape person profile with detailed information
 
 This example shows how to scrape a LinkedIn person profile including
-work experience and education history.
+work experience, education history, recent posts, and recent comments.
 """
 import asyncio
 from linkedin_scraper.scrapers.person import PersonScraper
@@ -52,6 +52,26 @@ async def main():
         
         if len(person.educations) > 3:
             print(f"  ... and {len(person.educations) - 3} more schools")
+        
+        # Display recent posts and reposts
+        print(f"\n📝 Recent Posts & Reposts ({len(person.recent_posts)}):")
+        for post in person.recent_posts:
+            post_type = "🔄 Repost" if post.is_repost else "📄 Post"
+            text_preview = post.text[:80] + "..." if post.text and len(post.text) > 80 else post.text
+            print(f"  {post_type}: {text_preview}")
+            if post.is_repost and post.original_author:
+                print(f"    Originally by: {post.original_author}")
+            print(f"    Posted: {post.posted_date} | 👍 {post.reactions_count or 0} | 💬 {post.comments_count or 0}")
+        
+        # Display recent comments
+        print(f"\n💬 Recent Comments ({len(person.recent_comments)}):")
+        for comment in person.recent_comments:
+            comment_preview = comment.comment_text[:80] + "..." if comment.comment_text and len(comment.comment_text) > 80 else comment.comment_text
+            print(f"  - {comment_preview}")
+            if comment.post_author:
+                print(f"    On post by: {comment.post_author}")
+            if comment.commented_date:
+                print(f"    Date: {comment.commented_date}")
     
     print("\n✓ Done!")
 

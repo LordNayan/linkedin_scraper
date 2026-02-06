@@ -1,6 +1,6 @@
 """Pydantic models for LinkedIn Person/Profile data."""
 
-from typing import List, Optional
+from typing import List, Optional, Any
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 
@@ -50,6 +50,33 @@ class Accomplishment(BaseModel):
     description: Optional[str] = None
 
 
+class PersonActivity(BaseModel):
+    """Model for a person's post or repost."""
+
+    linkedin_url: Optional[str] = None
+    urn: Optional[str] = None
+    text: Optional[str] = None
+    posted_date: Optional[str] = None
+    is_repost: bool = False
+    original_author: Optional[str] = None
+    reactions_count: Optional[int] = None
+    comments_count: Optional[int] = None
+    reposts_count: Optional[int] = None
+    image_urls: List[str] = Field(default_factory=list)
+
+
+class PersonComment(BaseModel):
+    """Model for a comment made by a person."""
+
+    linkedin_url: Optional[str] = None
+    post_urn: Optional[str] = None
+    comment_text: Optional[str] = None
+    commented_date: Optional[str] = None
+    post_author: Optional[str] = None
+    post_text: Optional[str] = None
+    post_text_preview: Optional[str] = None
+
+
 class Person(BaseModel):
     """
     LinkedIn Person/Profile model with validation.
@@ -67,6 +94,9 @@ class Person(BaseModel):
     interests: List[Interest] = Field(default_factory=list)
     accomplishments: List[Accomplishment] = Field(default_factory=list)
     contacts: List[Contact] = Field(default_factory=list)
+    recent_posts: List["PersonActivity"] = Field(default_factory=list)
+    recent_comments: List["PersonComment"] = Field(default_factory=list)
+    current_company: Optional[Any] = None  # Stores Company object for AI analysis
 
     @field_validator("linkedin_url")
     @classmethod
@@ -129,5 +159,7 @@ class Person(BaseModel):
             f"  Title: {self.job_title}\n"
             f"  Location: {self.location}\n"
             f"  Experiences: {len(self.experiences)}\n"
-            f"  Education: {len(self.educations)}>"
+            f"  Education: {len(self.educations)}\n"
+            f"  Recent Posts: {len(self.recent_posts)}\n"
+            f"  Recent Comments: {len(self.recent_comments)}>"
         )
