@@ -60,6 +60,10 @@ class PersonScraper(BaseScraper):
             name, location = await self._get_name_and_location()
             await self.callback.on_progress(f"Got name: {name}", 20)
 
+            # Get headline
+            headline = await self._get_headline()
+            await self.callback.on_progress("Got headline", 25)
+
             # Check open to work
             open_to_work = await self._check_open_to_work()
 
@@ -81,9 +85,21 @@ class PersonScraper(BaseScraper):
             if current_experience and current_experience.linkedin_url:
                 try:
                     from .company import CompanyScraper
+                    from .company_posts import CompanyPostsScraper
+                    
                     company_scraper = CompanyScraper(self.page)
                     current_company = await company_scraper.scrape(current_experience.linkedin_url)
-                    await self.callback.on_progress(f"Got company details", 70)
+                    await self.callback.on_progress(f"Got company details", 60)
+                    
+                    # Also get company's recent posts (last 3)
+                    try:
+                        posts_scraper = CompanyPostsScraper(self.page)
+                        company_posts = await posts_scraper.scrape(current_experience.linkedin_url, limit=3)
+                        current_company.recent_posts = company_posts
+                        await self.callback.on_progress(f"Got {len(company_posts)} company posts", 70)
+                    except Exception as e:
+                        logger.warning(f"Could not scrape company posts: {e}")
+                        
                 except Exception as e:
                     logger.warning(f"Could not scrape company details: {e}")
 
@@ -113,6 +129,7 @@ class PersonScraper(BaseScraper):
             person = Person(
                 linkedin_url=linkedin_url,
                 name=name,
+                headline=headline,
                 location=location,
                 about=about,
                 open_to_work=open_to_work,
@@ -208,6 +225,26 @@ class PersonScraper(BaseScraper):
         except Exception as e:
             logger.warning(f"Error getting name/location: {e}")
             return "Unknown", None
+
+    async def _get_headline(self) -> Optional[str]:
+        """Extract professional headline from profile."""
+        try:
+            # The headline is typically in a div with class containing 'headline'
+            # or in the text-body-medium class near the top card
+            headline = await self.safe_extract_text(
+                ".text-body-medium.break-words", default=""
+            )
+            if headline:
+                return headline.strip()
+            
+            # Fallback: try alternative selector
+            headline = await self.safe_extract_text(
+                ".pv-top-card--list-bullet li", default=""
+            )
+            return headline.strip() if headline else None
+        except Exception as e:
+            logger.debug(f"Error getting headline: {e}")
+            return None
 
     async def _check_open_to_work(self) -> bool:
         """Check if profile has open to work badge."""
@@ -1639,19 +1676,23 @@ class PersonScraper(BaseScraper):
         md.append("## 2. Name")
         md.append(f"{person.name}\n")
         
-        # 3. Location
-        md.append("## 3. Location")
+        # 3. Headline
+        md.append("## 3. Headline")
+        md.append(f"{person.headline if person.headline else 'Not specified'}\n")
+        
+        # 4. Location
+        md.append("## 4. Location")
         md.append(f"{person.location if person.location else 'Not specified'}\n")
         
-        # 4. About
-        md.append("## 4. About")
+        # 5. About
+        md.append("## 5. About")
         if person.about:
             md.append(f"{person.about}\n")
         else:
             md.append("Not provided\n")
         
-        # 5. Current Company Details
-        md.append("## 5. Current Company Details")
+        # 6. Current Company Details
+        md.append("## 6. Current Company Details")
         if person.experiences and len(person.experiences) > 0:
             current_exp = person.experiences[0]
             md.append(f"**Company Name:** {current_exp.institution_name}")
@@ -1675,12 +1716,32 @@ class PersonScraper(BaseScraper):
                     md.append(f"**Headquarters:** {current_company.headquarters}")
                 if current_company.founded:
                     md.append(f"**Founded:** {current_company.founded}")
+            
+            # Add company recent posts if available
+            if current_company and hasattr(current_company, 'recent_posts') and current_company.recent_posts:
+                md.append(f"\n**Recent Company Posts/Activity:**")
+                for i, post in enumerate(current_company.recent_posts[:3], 1):
+                    md.append(f"\n*Post {i}:*")
+                    if post.posted_date:
+                        md.append(f"- Posted: {post.posted_date}")
+                    if post.text:
+                        preview = post.text[:200] + "..." if len(post.text) > 200 else post.text
+                        md.append(f"- Content: {preview}")
+                    if post.linkedin_url:
+                        md.append(f"- Link: {post.linkedin_url}")
+                    if post.reactions_count or post.comments_count:
+                        engagement = []
+                        if post.reactions_count:
+                            engagement.append(f"{post.reactions_count} reactions")
+                        if post.comments_count:
+                            engagement.append(f"{post.comments_count} comments")
+                        md.append(f"- Engagement: {', '.join(engagement)}")
             md.append("")
         else:
             md.append("No current company information available\n")
         
-        # 6. Current Designation and Work Description
-        md.append("## 6. Current Designation and Work Description")
+        # 7. Current Designation and Work Description
+        md.append("## 7. Current Designation and Work Description")
         if person.experiences and len(person.experiences) > 0:
             current_exp = person.experiences[0]
             md.append(f"**Position:** {current_exp.position_title}")
@@ -1698,8 +1759,8 @@ class PersonScraper(BaseScraper):
         else:
             md.append("No current position information available\n")
         
-        # 7. Last 3 Posts/Reposts
-        md.append("## 7. Last 3 Posts/Reposts")
+        # 8. Last 3 Posts/Reposts
+        md.append("## 8. Last 3 Posts/Reposts")
         if person.recent_posts and len(person.recent_posts) > 0:
             for i, post in enumerate(person.recent_posts, 1):
                 post_type = "Repost" if post.is_repost else "Post"
@@ -1725,8 +1786,8 @@ class PersonScraper(BaseScraper):
         else:
             md.append("No recent posts available\n")
         
-        # 8. Last 3 Comments
-        md.append("## 8. Last 3 Comments Made")
+        # 9. Last 3 Comments
+        md.append("## 9. Last 3 Comments Made")
         if person.recent_comments and len(person.recent_comments) > 0:
             for i, comment in enumerate(person.recent_comments, 1):
                 md.append(f"\n### Comment {i}")

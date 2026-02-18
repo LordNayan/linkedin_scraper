@@ -26,10 +26,10 @@ async def browser():
     Fixture that provides a BrowserManager instance.
     Automatically loads session if available.
     
-    Note: Uses headless=False for LinkedIn compatibility.
+    Note: Uses headless=True for LinkedIn compatibility.
     LinkedIn may block or behave differently in headless mode.
     """
-    async with BrowserManager(headless=False) as browser_manager:
+    async with BrowserManager(headless=True) as browser_manager:
         # Try to load session if it exists
         if SESSION_FILE.exists():
             await browser_manager.load_session(str(SESSION_FILE))
@@ -42,13 +42,13 @@ async def browser_with_session():
     Fixture that provides a BrowserManager with loaded session.
     Skips test if session file doesn't exist.
     
-    Note: Uses headless=False for LinkedIn compatibility.
+    Note: Uses headless=True for LinkedIn compatibility.
     LinkedIn may block or behave differently in headless mode.
     """
     if not SESSION_FILE.exists():
         pytest.skip("Session file not found. See README for session setup instructions.")
     
-    async with BrowserManager(headless=False) as browser_manager:
+    async with BrowserManager(headless=True) as browser_manager:
         await browser_manager.load_session(str(SESSION_FILE))
         yield browser_manager
 

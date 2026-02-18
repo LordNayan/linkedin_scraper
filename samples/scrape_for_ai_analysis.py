@@ -37,7 +37,7 @@ async def main():
         profile_url = "https://www.linkedin.com/in/williamhgates/"
     
     # Initialize browser
-    async with BrowserManager(headless=False) as browser:
+    async with BrowserManager(headless=True) as browser:
         # Load your LinkedIn session
         await browser.load_session("linkedin_session.json")
         print("✓ Session loaded")

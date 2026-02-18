@@ -33,7 +33,7 @@ async def create_session():
     print("4. Your session will be saved to linkedin_session.json")
     print("\n" + "="*60 + "\n")
     
-    async with BrowserManager(headless=False) as browser:
+    async with BrowserManager(headless=True) as browser:
         # Navigate to LinkedIn login page
         print("Opening LinkedIn login page...")
         await browser.page.goto("https://www.linkedin.com/login")

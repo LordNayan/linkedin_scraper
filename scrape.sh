@@ -52,7 +52,7 @@ async def main():
     output_dir = Path("scraped_profiles")
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    async with BrowserManager(headless=False) as browser:
+    async with BrowserManager(headless=True) as browser:
         await browser.load_session("linkedin_session.json")
         print("✓ Session loaded")
         

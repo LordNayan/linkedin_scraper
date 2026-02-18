@@ -111,7 +111,7 @@ pytest -m unit
 ## Important Notes
 
 ### Headless Mode
-Integration tests run with `headless=False` because LinkedIn may block or behave differently in headless mode. This means:
+Integration tests run with `headless=True` because LinkedIn may block or behave differently in headless mode. This means:
 - Browser windows will open during integration tests
 - Tests will be slower than headless tests
 - You'll see the browser automation in action
@@ -131,7 +131,7 @@ If you want headless tests, you need to implement stealth mode or use unit tests
 Run `python setup_session.py` to create a LinkedIn session.
 
 ### Tests timing out or hanging
-- Integration tests require browser windows (headless=False)
+- Integration tests require browser windows (headless=True)
 - Make sure you have Xvfb or a display available in headless environments
 - Or run only unit tests: `pytest -m unit`
 

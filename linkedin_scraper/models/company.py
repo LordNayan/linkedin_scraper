@@ -3,6 +3,8 @@
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field, field_validator
 
+from .post import Post
+
 
 class CompanySummary(BaseModel):
     """Summary information for affiliated/showcase companies."""
@@ -39,6 +41,7 @@ class Company(BaseModel):
     showcase_pages: List[CompanySummary] = Field(default_factory=list)
     affiliated_companies: List[CompanySummary] = Field(default_factory=list)
     employees: List[Employee] = Field(default_factory=list)
+    recent_posts: List[Post] = Field(default_factory=list)
     
     @field_validator('linkedin_url')
     @classmethod

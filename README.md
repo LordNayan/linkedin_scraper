@@ -114,7 +114,7 @@ from linkedin_scraper import BrowserManager, PersonScraper
 
 async def main():
     # Initialize browser
-    async with BrowserManager(headless=False) as browser:
+    async with BrowserManager(headless=True) as browser:
         # Load authenticated session
         await browser.load_session("session.json")
         
@@ -140,7 +140,7 @@ asyncio.run(main())
 from linkedin_scraper import CompanyScraper
 
 async def scrape_company():
-    async with BrowserManager(headless=False) as browser:
+    async with BrowserManager(headless=True) as browser:
         await browser.load_session("session.json")
         
         scraper = CompanyScraper(browser.page)
@@ -160,7 +160,7 @@ asyncio.run(scrape_company())
 from linkedin_scraper import JobSearchScraper
 
 async def search_jobs():
-    async with BrowserManager(headless=False) as browser:
+    async with BrowserManager(headless=True) as browser:
         await browser.load_session("session.json")
         
         scraper = JobSearchScraper(browser.page)
@@ -185,7 +185,7 @@ asyncio.run(search_jobs())
 from linkedin_scraper import BrowserManager, CompanyPostsScraper
 
 async def scrape_company_posts():
-    async with BrowserManager(headless=False) as browser:
+    async with BrowserManager(headless=True) as browser:
         await browser.load_session("session.json")
         
         scraper = CompanyPostsScraper(browser.page)
@@ -215,7 +215,7 @@ LinkedIn requires authentication. You need to create a session file first:
 from linkedin_scraper import BrowserManager, wait_for_manual_login
 
 async def create_session():
-    async with BrowserManager(headless=False) as browser:
+    async with BrowserManager(headless=True) as browser:
         # Navigate to LinkedIn
         await browser.page.goto("https://www.linkedin.com/login")
         
@@ -237,7 +237,7 @@ from linkedin_scraper import BrowserManager, login_with_credentials
 import os
 
 async def login():
-    async with BrowserManager(headless=False) as browser:
+    async with BrowserManager(headless=True) as browser:
         # Login with credentials
         await login_with_credentials(
             browser.page,
@@ -261,7 +261,7 @@ from linkedin_scraper import ConsoleCallback, PersonScraper
 async def scrape_with_progress():
     callback = ConsoleCallback()  # Prints progress to console
     
-    async with BrowserManager(headless=False) as browser:
+    async with BrowserManager(headless=True) as browser:
         await browser.load_session("session.json")
         
         scraper = PersonScraper(browser.page, callback=callback)
@@ -355,7 +355,7 @@ class Post(BaseModel):
 
 ```python
 browser = BrowserManager(
-    headless=False,  # Show browser window
+    headless=True,  # Show browser window
     slow_mo=100,     # Slow down operations (ms)
     viewport={"width": 1920, "height": 1080},
     user_agent="Custom User Agent"
@@ -393,7 +393,7 @@ except ProfileNotFoundError:
 
 3. **Error Handling** - Always handle exceptions (rate limits, auth errors, etc.)
 
-4. **Headless Mode** - Use `headless=False` during development, `True` for production
+4. **Headless Mode** - Use `headless=True` during development, `True` for production
 
 5. **Respect LinkedIn** - Don't scrape aggressively, respect rate limits
 
